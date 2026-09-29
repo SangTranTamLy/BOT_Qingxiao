@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Temporary files
+temp/*
+!temp/.gitkeep
+*.tmp
+*.temp
+*.log
+*.zip
+
+# IDE / OS
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db
+desktop.ini
