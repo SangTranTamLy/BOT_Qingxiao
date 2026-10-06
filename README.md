@@ -278,6 +278,21 @@ pepe_smile_1
 pepe_smile_2
 ```
 
+### Phân tích link TikTok
+
+Khi gửi một link TikTok vào channel mà bot có quyền đọc tin nhắn, bot sẽ trả về một Embed phân tích riêng, gồm:
+
+- Lượt xem, lượt thích, bình luận, chia sẻ, yêu thích và tải xuống.
+- Âm thanh, caption, tài khoản đăng và ảnh thumbnail.
+- Thời gian đăng, ID, nguồn xử lý, khu vực và trạng thái truy cập.
+- Tương tác và tổng lượt tương tác.
+- Chất lượng video: trình duyệt, điện thoại, kích thước gốc, FPS, Kbps, codec, dung lượng và điểm VQ nếu nguồn cung cấp.
+- Danh mục và hashtag lấy từ dữ liệu API hoặc caption.
+
+Phần phân tích dùng dữ liệu công khai từ TikWM, đọc thêm metadata stream bằng `yt-dlp`, và dùng `ffprobe` để kiểm tra trực tiếp link video khi TikTok chặn `yt-dlp`. Bot không tải toàn bộ video để làm bước này. Những trường nguồn không cung cấp sẽ hiển thị `Không rõ`; shadow ban hiển thị `Yes/No` theo yêu cầu giao diện.
+
+Để hiện chính xác độ phân giải, FPS và codec trên máy chạy bot, cần cài FFmpeg và để lệnh `ffprobe` có trong `PATH`. Nếu không có `ffprobe`, bot vẫn chạy nhưng một số mục chất lượng có thể không lấy được.
+
 ## Luồng xử lý
 
 ```text
@@ -461,11 +476,27 @@ Bot mới dùng tên custom emoji có hậu tố `_gif`. Cần restart bot và c
 
 ### GIF upload bị báo quá lớn
 
-GIF upload được giữ animation nhưng hiện chưa được tự tối ưu. Hãy giảm dung lượng GIF trước khi đưa vào ZIP.
+GIF upload được giữ animation và bot sẽ thử resize/nén khi vượt kích thước hoặc dung lượng. Nếu GIF quá phức tạp và vẫn không thể tối ưu, hãy giảm số frame hoặc dung lượng trước khi đưa vào ZIP.
+
+### Upload emoji báo Discord API lỗi 400
+
+Bot sẽ tự chuẩn hóa ảnh/GIF về kích thước tối đa 128 px và giới hạn dung lượng trước khi upload. Report cũng hiển thị lý do rõ hơn: `30008` là server hết slot emoji, còn `50035` thường là dữ liệu hoặc định dạng ảnh bị Discord từ chối.
 
 ### Bot hiển thị “đang suy nghĩ” lâu
 
 Bot cần tải và fingerprint các emoji cũ để kiểm tra ảnh trùng, sau đó mới upload batch. Server càng nhiều emoji hoặc ZIP càng lớn thì thời gian xử lý càng tăng.
+
+### Log `yt-dlp Unexpected response from webpage request`
+
+Đây là lỗi tùy chọn khi bot đọc metadata chất lượng TikTok. Bot vẫn sử dụng dữ liệu TikWM và gửi Embed; chỉ những trường chất lượng mà nguồn không cung cấp mới hiển thị `Không rõ`. Có thể cập nhật dependency bằng:
+
+```powershell
+python -m pip install --upgrade yt-dlp
+```
+
+### Lỗi Discord `message_reference: Unknown message`
+
+Nếu tin nhắn chứa link TikTok bị xóa hoặc không còn truy cập được, bot sẽ tự gửi kết quả như một tin nhắn mới thay vì reply trực tiếp.
 
 ## Roadmap
 
