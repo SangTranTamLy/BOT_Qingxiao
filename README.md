@@ -1,543 +1,395 @@
 <p align="center">
-  <img src="assets/readme-banner.svg" alt="Qingxiao EJ - Discord Emoji Upload Bot" width="100%">
+  <img src="assets/readme-banner.svg" alt="Qingxiao EJ - Discord Emoji & TikTok Bot" width="100%">
 </p>
 
 <p align="center">
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white" alt="Python 3.11+"></a>
-  <a href="https://discordpy.readthedocs.io/"><img src="https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white" alt="discord.py 2.x"></a>
-  <a href="https://python-pillow.org/"><img src="https://img.shields.io/badge/Pillow-image%20processing-45B8AC" alt="Pillow"></a>
-  <img src="https://img.shields.io/badge/platform-Windows-0078D4?logo=windows&logoColor=white" alt="Windows">
+  <a href="https://discordpy.readthedocs.io/"><img src="https://img.shields.io/badge/discord.py-2.4%2B-5865F2?logo=discord&logoColor=white" alt="discord.py 2.4+"></a>
+  <a href="https://python-pillow.org/"><img src="https://img.shields.io/badge/Pillow-10.4%2B-45B8AC" alt="Pillow"></a>
+  <a href="https://github.com/yt-dlp/yt-dlp"><img src="https://img.shields.io/badge/yt--dlp-2024%2B-FF0000?logo=youtube&logoColor=white" alt="yt-dlp"></a>
+  <a href="https://docs.aiohttp.org/"><img src="https://img.shields.io/badge/aiohttp-3.9%2B-2C5BB4" alt="aiohttp"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Render-0078D4?logo=windows&logoColor=white" alt="Platform">
 </p>
 
-<h1 align="center">Qingxiao EJ · Discord Emoji Upload Bot</h1>
+<h1 align="center">BOT Qingxiao (Qingxiao EJ)</h1>
 
 <p align="center">
-  Upload hàng loạt emoji vào Discord Server từ một file ZIP — an toàn, rõ ràng và dễ sử dụng.
+  <b>Bot Discord đa chức năng: Upload Emoji hàng loạt từ ZIP & Phân tích chuyên sâu link TikTok / OAuth Login Kit</b>
 </p>
 
 <p align="center">
-  <img src="assets/status_success.webp" width="72" alt="Success status emoji">
-  <img src="assets/status_duplicate.webp" width="72" alt="Duplicate status emoji">
-  <img src="assets/status_error.webp" width="72" alt="Error status emoji">
-  <img src="assets/status_added.webp" width="72" alt="Added status emoji">
+  <img src="assets/status_success.webp" width="64" alt="Success status emoji">
+  <img src="assets/status_duplicate.webp" width="64" alt="Duplicate status emoji">
+  <img src="assets/status_error.webp" width="64" alt="Error status emoji">
+  <img src="assets/status_added.webp" width="64" alt="Added status emoji">
 </p>
 
-> Đây là project bot Discord v1 tập trung vào một luồng đơn giản: nhận ZIP, kiểm tra an toàn, xử lý ảnh, upload lần lượt và trả report dễ đọc.
+> [!NOTE]
+> **Xác minh trạng thái mã nguồn (`bot.py`):**
+> File chính `bot.py` hiện có **1.847 dòng** code thực tế (giao diện GitHub cơ sở hiển thị khoảng 1.401 dòng trước khi hoàn thiện module tích hợp OAuth server và video stream probe). Toàn bộ dự án được thiết kế theo kiến trúc phi đồng bộ (`asyncio`), tuân thủ nghiêm ngặt Discord API chính thức và bảo mật tài nguyên.
+
+---
+
+## 📌 Phân định Tri thức (Knowledge Base Separation)
+
+Để tránh nhầm lẫn giữa hai miền tính năng hoàn toàn độc lập trong cùng một codebase, tài liệu này phân tách rõ ràng thành **2 Mục Tri Thức**:
+
+| Tiêu chí | Mục Tri Thức 1: Bulk Emoji Uploader | Mục Tri Thức 2: TikTok Analytics & OAuth |
+|---|---|---|
+| **Mục đích** | Upload hàng loạt custom emoji từ file ZIP lên Guild Discord | Phân tích siêu dữ liệu video TikTok & Tích hợp TikTok Login Kit |
+| **Cơ chế kích hoạt** | Slash command: `/upload-emojis`, `/ping` | Sự kiện `on_message` (regex URL) & Slash commands: `/connect-tiktok`, `/tiktok-account`, `/disconnect-tiktok` |
+| **Quyền Discord bắt buộc** | `manage_emojis_and_stickers` (cả User gọi lệnh và Bot) | `View Channels`, `Send Messages`, `Embed Links`, `Read Message History` *(Tùy chọn: `Manage Messages` để ẩn preview link gốc)* |
+| **Thư viện nòng cốt** | `Pillow`, `zipfile`, `hashlib`, `tempfile`, `shutil` | `aiohttp`, `yt-dlp`, `subprocess` (ffprobe tùy chọn), `urllib`, `secrets` |
+| **Phụ thuộc ngoại vi** | Không phụ thuộc | **Tùy chọn:** FFmpeg / `ffprobe` *(tự động fallback nếu thiếu, không gây lỗi)* |
+| **Đường đi I/O & Mạng** | Tải ZIP -> Discord CDN (hash emoji cũ) -> Gửi payload emoji lên Discord API | Gọi TikWM API -> Trích xuất stream metadata -> Gọi TikTok OAuth API |
+| **Quản lý dữ liệu tạm** | Thư mục tạm đĩa cứng (`tempfile`), dọn dẹp tuyệt đối trong `finally` | Bộ nhớ tiến trình RAM (`TIKTOK_TOKENS`, `TIKTOK_OAUTH_STATES`) |
+
+---
 
 ## Mục lục
 
-- [Tổng quan](#tổng-quan)
-- [Bot giải quyết vấn đề gì?](#bot-giải-quyết-vấn-đề-gì)
-- [Tính năng nổi bật](#tính-năng-nổi-bật)
-- [Yêu cầu](#yêu-cầu)
-- [Cài đặt nhanh trên Windows](#cài-đặt-nhanh-trên-windows)
-- [Tạo Discord Application](#tạo-discord-application)
-- [Cấu hình quyền bot](#cấu-hình-quyền-bot)
-- [Chạy bot](#chạy-bot)
-- [Sử dụng](#sử-dụng)
-- [Luồng xử lý](#luồng-xử-lý)
-- [Quy tắc đặt tên](#quy-tắc-đặt-tên)
-- [Xử lý ảnh và GIF](#xử-lý-ảnh-và-gif)
-- [Giới hạn hiện tại](#giới-hạn-hiện-tại)
-- [Bảo mật](#bảo-mật)
-- [Cấu trúc project](#cấu-trúc-project)
-- [FAQ và xử lý sự cố](#faq-và-xử-lý-sự-cố)
-- [Roadmap](#roadmap)
-- [Tech stack](#tech-stack)
+1. [Mục Tri Thức 1: Bulk Emoji Uploader](#-mục-tri-thức-1-bulk-emoji-uploader)
+   - [Mục đích và phạm vi](#11-mục-đích-và-phạm-vi)
+   - [Các Handler và Kiểm tra quyền hạn](#12-các-handler-và-kiểm-tra-quyền-hạn)
+   - [Đường đi dữ liệu (Data Pipeline)](#13-đường-đi-dữ-liệu-data-pipeline)
+   - [Giới hạn kỹ thuật thực tế](#14-giới-hạn-kỹ-thuật-thực-tế)
+   - [Thuật toán Fingerprint & Đặt tên](#15-thuật-toán-fingerprint--đặt-tên)
+   - [Xử lý ảnh tĩnh & GIF động](#16-xử-lý-ảnh-tĩnh--gif-động)
+   - [Xử lý ngoại lệ & Giới hạn Discord](#17-xử-lý-ngoại-lệ--giới-hạn-discord)
+   - [Emoji trạng thái động](#18-emoji-trạng-thái-động)
+2. [Mục Tri Thức 2: TikTok Analytics & OAuth Integration](#-mục-tri-thức-2-tiktok-analytics--oauth-integration)
+   - [Mục đích và phạm vi](#21-mục-đích-và-phạm-vi)
+   - [Các Handler, Trigger và Endpoint Web](#22-các-handler-trigger-và-endpoint-web)
+   - [Đường đi dữ liệu & Kiến trúc kết hợp đa nguồn](#23-đường-đi-dữ-liệu--kiến-trúc-kết-hợp-đa-nguồn)
+   - [Xác minh hoạt động khi thiếu FFmpeg/ffprobe](#24-xác-minh-hoạt-động-khi-thiếu-ffmpegffprobe)
+   - [Xử lý ngoại lệ & Độ bền Discord Message](#25-xử-lý-ngoại-lệ--độ-bền-discord-message)
+   - [Hệ thống TikTok OAuth Login Kit](#26-hệ-thống-tiktok-oauth-login-kit)
+3. [Hướng dẫn cài đặt & Triển khai](#-hướng-dẫn-cài-đặt--triển-khai)
+   - [Cài đặt trên Windows](#cài-đặt-trên-windows)
+   - [Cài đặt tùy chọn FFmpeg / ffprobe](#cài-đặt-tùy-chọn-ffmpeg--ffprobe)
+   - [Triển khai trên Render Web Service](#triển-khai-trên-render-web-service)
+4. [Cấu hình biến môi trường (`.env`)](#-cấu-hình-biến-môi-trường-env)
+5. [Cấu trúc dự án](#-cấu-trúc-dự-án)
+6. [FAQ & Xử lý sự cố](#-faq--xử-lý-sự-cố)
 
-## Tổng quan
+---
 
-**Qingxiao EJ** là Discord bot dùng slash command để đưa nhiều emoji lên server từ một file ZIP.
+## 🎨 Mục Tri Thức 1: Bulk Emoji Uploader
 
-Thay vì upload từng ảnh thủ công, người dùng chỉ cần:
+### 1.1 Mục đích và phạm vi
+Giúp người quản trị Discord server tải hàng loạt custom emoji từ một file `.zip` lên Guild chỉ với một câu lệnh slash command, tự động chuẩn hóa kích thước, nén dung lượng, lọc ảnh trùng và thông báo chi tiết mà không làm gián đoạn cả batch khi có file lỗi.
 
-1. Chuẩn bị một file `emoji.zip`.
-2. Chạy `/upload-emojis`.
-3. Chọn ZIP và nhập tiền tố tên emoji.
-4. Chờ bot xử lý và xem report thành công, trùng hoặc lỗi.
+### 1.2 Các Handler và Kiểm tra quyền hạn
+- **Lệnh chính:** `/upload-emojis (file: Attachment, prefix: str = "emoji")`
+- **Lệnh kiểm tra:** `/ping` (trả về độ trễ latency tính bằng ms).
+- **Ràng buộc phạm vi:**
+  - `@app_commands.guild_only()`: Bắt buộc gọi trong Discord Server (Guild), từ chối thực thi trong tin nhắn riêng Direct Message (DM).
+  - `@app_commands.checks.has_permissions(manage_emojis_and_stickers=True)`: Kiểm tra người dùng có quyền quản lý emoji/stickers.
+  - Kiểm tra quyền Bot: Kiểm tra `guild.me.guild_permissions.manage_emojis_and_stickers` hoặc `administrator`. Nếu thiếu, trả thông báo lỗi ngay lập tức.
+- **Bắt lỗi tương tác:** Handler `@upload_emojis.error` bắt `app_commands.NoPrivateMessage` và `app_commands.MissingPermissions` để phản hồi lịch sự, dễ hiểu.
 
-Bot không dùng selfbot, user token, browser automation hoặc API không chính thức.
-
-## Bot giải quyết vấn đề gì?
-
-Upload nhiều emoji thủ công thường tốn thời gian và dễ gặp các vấn đề:
-
-- Tên file chứa ký tự Discord không chấp nhận.
-- Ảnh vượt giới hạn dung lượng.
-- ZIP chứa file lạ hoặc đường dẫn nguy hiểm.
-- Upload lại ảnh cũ nhưng không biết ảnh đã tồn tại.
-- Một ảnh lỗi làm gián đoạn cả batch.
-
-Bot xử lý từng ảnh độc lập, tiếp tục khi một ảnh lỗi và trả kết quả cuối cùng theo từng nhóm.
-
-## Tính năng nổi bật
-
-### Discord
-
-- Slash command `/ping`.
-- Slash command `/upload-emojis`.
-- Chỉ cho phép upload trong Discord Server.
-- Kiểm tra quyền của user và bot.
-- Đồng bộ command theo `TEST_GUILD_ID` để test nhanh hoặc sync global.
-
-### ZIP an toàn
-
-- Chỉ nhận file `.zip`.
-- Chặn ZIP path traversal như `../../secret.txt`, đường dẫn tuyệt đối và path Windows nguy hiểm.
-- Giới hạn số entry, số ảnh và dung lượng sau giải nén.
-- Không chạy bất kỳ file hoặc script nào trong ZIP.
-- Tự dọn thư mục tạm sau khi xử lý.
-
-### Ảnh và emoji
-
-- Hỗ trợ `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`.
-- Ảnh tĩnh được kiểm tra, resize giữ tỷ lệ và nén khi cần.
-- GIF hợp lệ được giữ animation nếu nằm trong giới hạn.
-- Phát hiện ảnh trùng bằng fingerprint nội dung, không chỉ dựa trên tên file.
-- Tự chọn số tiếp theo nếu tên emoji đã tồn tại.
-- Report dùng Embed màu xanh biển cùng custom emoji trạng thái động.
-
-## Demo command
-
-### Kiểm tra bot
+### 1.3 Đường đi dữ liệu (Data Pipeline)
+Luồng dữ liệu của tác vụ upload emoji được thực thi tuần tự theo 8 bước an toàn:
 
 ```text
-/ping
+[1] Người dùng gửi /upload-emojis đính kèm emoji.zip
+      │
+[2] Kiểm tra định dạng (.zip) & dung lượng file tải lên <= 50 MB
+      │
+[3] Chuẩn hóa prefix (regex a-z0-9_, kiểm tra độ dài <= 28 ký tự)
+      │
+[4] Defer interaction (thinking...) & Khởi tạo thư mục tạm: temp/emoji_upload_xxxx
+      │
+[5] Lưu ZIP xuống đĩa -> extract_zip_safely:
+      ├─ Chặn Path Traversal (chặn .., null byte, absolute path, windows drive)
+      ├─ Kiểm tra số entry <= 500
+      ├─ Kiểm tra uncompressed size <= 200 MB (chống ZIP bomb)
+      └─ Lọc các file ảnh hợp lệ (.png, .jpg, .jpeg, .gif, .webp) <= 100 files
+      │
+[6] collect_existing_emoji_fingerprints:
+      └─ Tải đồng thời tối đa 8 kết nối CDN, băm SHA-256 các emoji hiện có trên Server
+      │
+[7] Vòng lặp xử lý từng file ảnh:
+      ├─ Chuẩn bị bytes: optimize_static_image hoặc optimize_animated_image
+      ├─ Tính fingerprint_image (SHA-256 pixel buffer thumbnail 128x128 RGBA)
+      ├─ Kiểm tra trùng 2 lớp: trùng Guild HOẶC trùng trong batch ZIP -> ghi vào skipped
+      ├─ Tự sinh tên không trùng: get_next_available_emoji_name (prefix_1, prefix_2,...)
+      ├─ Upload: guild.create_custom_emoji(...)
+      └─ Chờ 0.1 giây (UPLOAD_DELAY_SECONDS) để tránh rate limit Discord
+      │
+[8] Tạo Embed báo cáo tổng kết (Thành công / Trùng / Lỗi) & dọn dẹp thư mục tạm (finally)
 ```
 
-### Upload một batch
+### 1.4 Giới hạn kỹ thuật thực tế
+Đối chiếu trực tiếp với các hằng số được định nghĩa trong `bot.py`:
+
+| Thông số kỹ thuật trong code | Giá trị thực tế | Mục đích kỹ thuật |
+|---|---:|---|
+| `MAX_ZIP_SIZE` | **50 MB** (`50 * 1024 * 1024` bytes) | Giới hạn dung lượng file ZIP tải lên từ Discord |
+| `MAX_UNCOMPRESSED_ZIP_SIZE` | **200 MB** (`200 * 1024 * 1024` bytes) | Ngăn chặn tấn công giải nén cạn kiệt bộ nhớ (ZIP bomb) |
+| `MAX_ZIP_ENTRIES` | **500 entries** | Giới hạn tổng số file/thư mục duyệt qua trong ZIP |
+| `MAX_FILES_PER_UPLOAD` | **100 files** | Giới hạn số file ảnh tối đa được phép upload trong một lượt |
+| `MAX_EMOJI_BYTES` | **256 KB** (`256 * 1024` bytes) | Giới hạn dung lượng tối đa cho mỗi emoji theo chuẩn Discord API |
+| `MAX_CONCURRENT_CDN_DOWNLOADS` | **8 tác vụ** | `asyncio.Semaphore` kiểm soát lưu lượng tải fingerprint từ CDN |
+| `UPLOAD_DELAY_SECONDS` | **0.1 giây** | Khoảng nghỉ giữa các lượt tạo custom emoji để tránh nghẽn rate limit |
+| `MAX_EMOJI_NAME_LENGTH` | **32 ký tự** | Độ dài tối đa tên emoji trên Discord (Prefix tối đa: **28 ký tự**) |
+| Thang kích thước resize | `128, 112, 96, 80, 64, 48, 32` px | Các mốc kích thước thử nghiệm khi nén ảnh tĩnh và GIF động |
+| Định dạng ảnh hỗ trợ | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | Các đuôi file được bộ trích xuất chấp nhận |
+
+### 1.5 Thuật toán Fingerprint & Đặt tên
+- **Thuật toán băm nội dung (`fingerprint_image`):**
+  - Mở ảnh bằng Pillow, lấy toàn bộ frame (hỗ trợ cả ảnh tĩnh lẫn ảnh động nhiều frame).
+  - Với từng frame: chuyển hệ màu về `RGBA`, thu nhỏ tỷ lệ với thuật toán chất lượng cao `Image.Resampling.LANCZOS` về tối đa `128x128`.
+  - Băm dữ liệu pixel raw bytes kèm theo chiều rộng (width) và chiều cao (height) bằng thuật toán `SHA-256`.
+  - Cho phép phát hiện 2 file hoàn toàn trùng nhau về mặt hình ảnh dù khác tên file hoặc khác định dạng nén (ví dụ `icon.png` và `icon_copy.jpg`).
+- **Quy tắc sinh tên emoji (`generate_emoji_name` & `get_next_available_emoji_name`):**
+  - Prefix được chuẩn hóa: viết thường, đổi khoảng trắng và ký tự lạ thành `_`, gộp dấu `_` liên tiếp.
+  - Tên tạo ra: `<prefix>_<stt>`, ví dụ `pepe_1`, `pepe_2`.
+  - Nếu tên đã tồn tại trên Guild hoặc đã được đặt trước bởi ảnh trước trong cùng batch, bot tự động tăng STT lên số tiếp theo khả dụng (`pepe_3`, `pepe_4`...) mà không bị trùng hay ghi đè.
+
+### 1.6 Xử lý ảnh tĩnh & GIF động
+- **Ảnh tĩnh (`PNG`, `JPG`, `JPEG`, `WEBP`):**
+  - Nếu đã là file PNG, dung lượng <= 256 KB và kích thước <= 128 px: giữ nguyên dữ liệu gốc.
+  - Nếu vượt quá: chuyển hệ màu sang RGBA, lần lượt thử nghiệm resize theo thang kích thước `[128, 112, 96, 80, 64, 48, 32]` pixel, xuất sang định dạng `PNG` với cờ `optimize=True` cho đến khi dung lượng <= 256 KB.
+- **GIF động (`GIF`, WebP động):**
+  - Xác thực tính hợp lệ của file và đếm số frame (`n_frames`).
+  - Nếu file có nhiều hơn 1 frame và vượt quá 256 KB hoặc kích thước > 128 px: hàm `optimize_animated_image` tách từng frame gốc, lưu giữ thông số `duration` từng frame (tối thiểu 20ms) và thuộc tính `loop`.
+  - Resize từng frame với `LANCZOS` theo thang kích thước và tái tạo GIF với `disposal=2` và `optimize=True`. Nếu vẫn vượt 256 KB sau khi thử mức 32px thì thông báo lỗi rõ ràng.
+
+### 1.7 Xử lý ngoại lệ & Giới hạn Discord
+- Quá trình upload từng ảnh được bọc riêng biệt trong khối `try...except`, một ảnh hỏng không làm dừng toàn bộ batch.
+- **Giải mã mã lỗi Discord API (`describe_discord_http_error`):**
+  - `Code 30008`: "server đã hết slot emoji" (Server đạt giới hạn số lượng emoji của gói Boost).
+  - `Code 50013`: "bot thiếu quyền" (Bot bị tước quyền giữa chừng hoặc role của bot thấp hơn).
+  - `Code 50035`: "dữ liệu ảnh không hợp lệ hoặc Discord từ chối định dạng ảnh".
+- **Dọn dẹp thư mục tạm an toàn:** Sử dụng `shutil.rmtree(temp_dir, ignore_errors=True)` trong khối `finally`, đảm bảo không để lại file rác trên ổ cứng dù lệnh thành công hay thất bại.
+
+### 1.8 Emoji trạng thái động
+Bot tự động tìm kiếm hoặc khởi tạo 4 custom animated emoji trên Guild từ các asset động trong thư mục `assets/`:
+- `report_success_gif`: Biểu tượng thành công.
+- `report_duplicate_gif`: Biểu tượng trùng lặp/bỏ qua.
+- `report_error_gif`: Biểu tượng thất bại/lỗi.
+- `report_added_gif`: Biểu tượng đã thêm vào Guild.
+
+> [!TIP]
+> **Cơ chế Fallback thông minh:** Nếu server không còn đủ 4 slot emoji trống hoặc bot thiếu quyền tạo emoji biểu tượng, bot sẽ tự động chuyển sang dùng emoji Unicode dự phòng: ✅, ⚠️, ❌, ✨. Report vẫn được gửi đầy đủ và không bao giờ bị lỗi.
+
+---
+
+## 📱 Mục Tri Thức 2: TikTok Analytics & OAuth Integration
+
+### 2.1 Mục đích và phạm vi
+Phân tích tự động các liên kết TikTok được gửi vào kênh chat Discord, trích xuất dữ liệu tương tác, thông tin âm thanh, chất lượng kỹ thuật của video và link tải video không watermark. Đồng thời hỗ trợ liên kết tài khoản TikTok chính chủ thông qua TikTok Login Kit (OAuth2).
+
+### 2.2 Các Handler, Trigger và Endpoint Web
+- **Bộ lắng nghe tin nhắn:** `on_message(message: discord.Message)`:
+  - Bỏ qua toàn bộ tin nhắn từ các tài khoản Bot (`message.author.bot == True`).
+  - Regex nhận diện đường dẫn TikTok:
+    ```regex
+    https?://(?:www\.|vt\.|vm\.)?tiktok\.com/[^\s]+
+    ```
+  - Khi khớp, kích hoạt `process_tiktok_link(message, url)` và hiển thị Discord typing indicator (`message.channel.typing()`).
+- **Slash Commands (TikTok OAuth):**
+  - `/connect-tiktok`: Tạo link kết nối bảo mật đến trang đăng nhập TikTok Login Kit.
+  - `/tiktok-account`: Xem thông tin chi tiết của tài khoản TikTok đã được user cấp quyền.
+  - `/disconnect-tiktok`: Thu hồi token truy cập qua TikTok Revoke API và xóa khỏi bộ nhớ bot.
+- **HTTP Web Server nội bộ (`aiohttp.web`):**
+  - Tích hợp sẵn trong tiến trình bot, lắng nghe cổng `PORT` (mặc định: `10000`).
+  - `GET /` & `GET /healthz`: Endpoint kiểm tra sức khỏe dịch vụ (dùng cho Render Web Service).
+  - `GET /tiktok/login`: Tiếp nhận yêu cầu đăng nhập từ Discord user, kiểm tra config và chuyển hướng đến trang xác thực TikTok.
+  - `GET /tiktok/callback`: Nhận authorization code từ TikTok, thực hiện đổi token, truy vấn thông tin cơ bản và gửi tin nhắn DM xác nhận đến người dùng trên Discord.
+
+### 2.3 Đường đi dữ liệu & Kiến trúc kết hợp đa nguồn
+Hệ thống sử dụng cơ chế tổng hợp dữ liệu 3 tầng (Multi-Tier Data Aggregation) để thu thập thông tin video:
 
 ```text
-/upload-emojis file:emoji.zip prefix:pepe
+[Người dùng gửi link TikTok vào kênh Discord]
+                      │
+                      ▼
+   [Tầng 1: TikWM API công khai (Primary Data Source)]
+   ├─ Gửi HTTP GET: https://www.tikwm.com/api/?url={url}&hd=1
+   ├─ Trích xuất: Tác giả (nickname, avatar), Caption, Thumbnail, Video ID
+   ├─ Trích xuất thống kê: Views, Likes, Comments, Shares, Saves, Downloads
+   ├─ Tính toán: Tỷ lệ tương tác Engagement Rate = (Total Interactions / Views) * 100
+   ├─ Trích xuất: Âm thanh (tiêu đề, tác giả, thời lượng)
+   ├─ Trích xuất: Khu vực, Trạng thái truy cập (public/private/deleted), Shadow ban (Yes/No)
+   └─ Lấy link tải video gốc không logo (play / hdplay)
+                      │
+                      ▼
+   [Tầng 2: yt-dlp Stream Extraction (Secondary Data Source)]
+   ├─ Chạy _extract_tiktok_quality(url) trong thread riêng (timeout 15s)
+   ├─ Cấu hình: skip_download=True, logger ẩn lỗi (_QuietYTDLPLogger)
+   ├─ Trích xuất: Độ phân giải tốt nhất (trình duyệt), cấu hình di động, FPS, bitrate, codec, VQScore
+   └─ Nếu TikTok chặn yt-dlp hoặc timeout -> fallback an toàn, không ngắt luồng
+                      │
+                      ▼
+   [Tầng 3: ffprobe Video Stream Probe (Tertiary / Fallback Source)]
+   ├─ Kích hoạt khi thiếu thông số {width, height, codec} và có link video trực tiếp
+   ├─ Kiểm tra sự hiện diện của lệnh ffprobe trong hệ điều hành (shutil.which)
+   ├─ Xem chi tiết cơ chế hoạt động bên dưới
+                      │
+                      ▼
+   [Tạo Discord Embed màu xanh biển 0x2F80ED & Trả kết quả về kênh chat]
 ```
 
-Kết quả tên emoji sẽ có dạng:
+### 2.4 Xác minh hoạt động khi thiếu FFmpeg/ffprobe
+Hàm `_probe_video_quality(video_url: str)` đảm nhiệm việc kiểm tra luồng video trực tiếp từ URL của TikWM:
 
-```text
-pepe_1
-pepe_2
-pepe_3
+```python
+ffprobe_path = shutil.which("ffprobe")
+if not ffprobe_path or not video_url:
+    return {}
 ```
 
-`prefix` là tùy chọn. Nếu bỏ trống, bot dùng tiền tố mặc định `emoji`.
+> [!IMPORTANT]
+> **Cách thức bot hoạt động khi hệ thống THIẾU FFmpeg/ffprobe:**
+> 1. `shutil.which("ffprobe")` kiểm tra trong biến môi trường `PATH`. Nếu không tìm thấy, hàm ngay lập tức trả về dictionary rỗng `{}` mà **KHÔNG gọi lệnh hệ thống, KHÔNG ném ngoại lệ và KHÔNG làm crash bot**.
+> 2. Hàm tổng hợp `_build_quality_text` sẽ ưu tiên sử dụng thông tin độ phân giải lấy từ API TikWM hoặc `yt-dlp`.
+> 3. Đối với các trường mà nguồn API không cung cấp (như FPS, Codec, Bitrate chi tiết), bot hiển thị chuỗi thân thiện **`Không rõ`**.
+> 4. **Toàn bộ thông tin phân tích quan trọng khác** (Lượt xem, thích, bình luận, chia sẻ, âm thanh, tỷ lệ tương tác, hashtag, tác giả, thumbnail, link tải không logo) **VẪN ĐƯỢC HIỂN THỊ ĐẦY ĐỦ 100%**.
+> 
+> *Khi hệ thống CÓ cài đặt FFmpeg/ffprobe trong PATH:*
+> Bot sẽ chạy lệnh `ffprobe` với cờ `select_streams v:0` để đọc trực tiếp container video qua HTTP trong vòng 20s, giải mã JSON để cung cấp chính xác tuyệt đối: độ phân giải pixel gốc, FPS chính xác (tính từ phân số `avg_frame_rate`), codec video (`h264`, `hevc`...) và bitrate thực tế.
 
-## Yêu cầu
+### 2.5 Xử lý ngoại lệ & Độ bền Discord Message
+- **Tin nhắn gốc bị xóa (`Unknown message` / Discord HTTP 50035):**
+  Khi người dùng xóa tin nhắn chứa link TikTok trong lúc bot đang phân tích, lệnh `message.reply()` sẽ báo lỗi `discord.NotFound` hoặc `discord.HTTPException (code 50035)`. Bot tự động bắt lỗi này và chuyển đổi sang `message.channel.send(embed=embed)`, đảm bảo kết quả phân tích không bị mất.
+- **Ẩn preview liên kết gốc:** Bot gọi `message.edit(suppress=True)` để ẩn bản xem trước mặc định của Discord. Nếu bot không có quyền quản lý tin nhắn (`discord.Forbidden`), lỗi được bỏ qua an toàn mà không ảnh hưởng kết quả.
+- **Chặn rác console:** Sử dụng lớp ghi log tùy biến `_QuietYTDLPLogger` để ngăn chặn các cảnh báo kết nối mạng hoặc lỗi định dạng của `yt-dlp` làm tràn console log.
 
-- Windows 10/11.
-- Python 3.11 trở lên.
-- VS Code là tùy chọn nhưng được khuyến nghị.
-- Extension VS Code:
-  - Python — Microsoft.
-  - Pylance — Microsoft.
-- Một Discord Application có Bot User.
-- Bot đã được mời vào server cần upload emoji.
+### 2.6 Hệ thống TikTok OAuth Login Kit
+- **Bảo mật:**
+  - Sử dụng tham số `state` ngẫu nhiên 32 ký tự (`secrets.token_urlsafe(32)`) với thời gian sống TTL 10 phút để phòng chống tấn công CSRF.
+  - Tuyệt đối không thu thập mật khẩu, cookie hay thông tin đăng nhập nhạy cảm của người dùng.
+- **Phạm vi quyền (Scopes):** `user.info.basic`, `user.info.profile`, `user.info.stats`, `video.list`.
+- **Cơ chế lưu trữ:**
+  - Token được lưu tạm trong biến RAM `TIKTOK_TOKENS` phục vụ mục đích kiểm thử và demo trên gói Render Free.
+  - Tự động làm mới token thông qua `_refresh_tiktok_token` khi thời gian hết hạn còn dưới 90 giây.
+  - Lệnh `/disconnect-tiktok` gọi endpoint `https://open.tiktokapis.com/v2/oauth/revoke/` để hủy quyền chính thức từ máy chủ TikTok.
 
-## Cài đặt nhanh trên Windows
+---
 
-Mở PowerShell hoặc terminal trong VS Code tại thư mục project:
+## 🚀 Hướng dẫn cài đặt & Triển khai
 
-### 1. Tạo virtual environment
+### Cài đặt trên Windows
 
+#### 1. Tạo môi trường ảo (Virtual Environment)
+Mở PowerShell tại thư mục dự án:
 ```powershell
 py -3.11 -m venv .venv
-```
-
-### 2. Kích hoạt môi trường
-
-PowerShell:
-
-```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Command Prompt:
-
-```bat
-.venv\Scripts\activate
-```
-
-### 3. Cài dependency
-
+#### 2. Cài đặt các gói phụ thuộc
 ```powershell
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-### 4. Tạo file `.env`
-
-PowerShell:
-
+#### 3. Tạo và điền file cấu hình `.env`
 ```powershell
 Copy-Item .env.example .env
 ```
+Mở `.env` và điền token Discord của bạn.
 
-Sau đó mở `.env` và điền:
-
-```env
-DISCORD_TOKEN=PASTE_YOUR_BOT_TOKEN_HERE
-TEST_GUILD_ID=
-```
-
-Không đưa token vào `bot.py`, README, Git hoặc tin nhắn công khai.
-
-## Tạo Discord Application
-
-1. Mở [Discord Developer Portal](https://discord.com/developers/applications).
-2. Chọn **New Application**.
-3. Đặt tên application, ví dụ `Qingxiao EJ`.
-4. Mở mục **Bot** và chọn **Add Bot**.
-5. Tạo hoặc reset token.
-6. Copy token vào `.env` ở biến `DISCORD_TOKEN`.
-
-### Mời bot vào server
-
-Trong **OAuth2 → URL Generator**:
-
-- Scopes:
-  - `bot`
-  - `applications.commands`
-- Bot Permissions:
-  - `View Channels`
-  - `Send Messages`
-  - `Use Application Commands`
-  - `Manage Expressions` hoặc `Create Expressions`
-
-Message Content Intent không cần bật vì bot chỉ dùng slash command.
-
-## Cấu hình quyền bot
-
-### User
-
-User chạy `/upload-emojis` cần quyền quản lý emoji/expressions tương ứng.
-
-### Bot
-
-Bot cần quyền:
-
-- Xem channel.
-- Gửi message.
-- Dùng application commands.
-- Tạo hoặc quản lý expressions.
-
-Để hiển thị 4 emoji trạng thái động inline, server cần khoảng 4 slot emoji trống. Nếu không đủ slot, bot tự dùng emoji Unicode dự phòng và vẫn gửi report.
-
-## Chạy bot
-
-Sau khi activate `.venv`:
-
+#### 4. Khởi chạy bot
 ```powershell
 python bot.py
-```
-
-Hoặc:
-
-```powershell
-py bot.py
-```
-
-Trong VS Code, nhấn `F5` và chọn profile:
-
-```text
-Run Discord Emoji Bot
-```
-
-Log thành công thường có dạng:
-
-```text
-[SYNC] 2 command(s) synced to test guild.
-[READY] Logged in as ...
-```
-
-Nếu chỉ sync global, command có thể xuất hiện chậm hơn so với test guild.
-
-## Sử dụng
-
-### `/ping`
-
-Kiểm tra bot có online và phản hồi được hay không.
-
-### `/upload-emojis`
-
-Các trường nhập:
-
-| Trường | Bắt buộc | Mô tả |
-|---|:---:|---|
-| `file` | Có | File ZIP chứa ảnh emoji |
-| `prefix` | Không | Tiền tố tên, mặc định là `emoji` |
-
-Ví dụ:
-
-```text
-prefix = Pepe Smile!!
-```
-
-Bot chuẩn hóa thành:
-
-```text
-pepe_smile_1
-pepe_smile_2
-```
-
-### Phân tích link TikTok
-
-Khi gửi một link TikTok vào channel mà bot có quyền đọc tin nhắn, bot sẽ trả về một Embed phân tích riêng, gồm:
-
-- Lượt xem, lượt thích, bình luận, chia sẻ, yêu thích và tải xuống.
-- Âm thanh, caption, tài khoản đăng và ảnh thumbnail.
-- Thời gian đăng, ID, nguồn xử lý, khu vực và trạng thái truy cập.
-- Tương tác và tổng lượt tương tác.
-- Chất lượng video: trình duyệt, điện thoại, kích thước gốc, FPS, Kbps, codec, dung lượng và điểm VQ nếu nguồn cung cấp.
-- Danh mục và hashtag lấy từ dữ liệu API hoặc caption.
-
-Phần phân tích dùng dữ liệu công khai từ TikWM, đọc thêm metadata stream bằng `yt-dlp`, và dùng `ffprobe` để kiểm tra trực tiếp link video khi TikTok chặn `yt-dlp`. Bot không tải toàn bộ video để làm bước này. Những trường nguồn không cung cấp sẽ hiển thị `Không rõ`; shadow ban hiển thị `Yes/No` theo yêu cầu giao diện.
-
-Để hiện chính xác độ phân giải, FPS và codec trên máy chạy bot, cần cài FFmpeg và để lệnh `ffprobe` có trong `PATH`. Nếu không có `ffprobe`, bot vẫn chạy nhưng một số mục chất lượng có thể không lấy được.
-
-## Luồng xử lý
-
-```text
-Người dùng chọn emoji.zip
-        ↓
-Kiểm tra extension và dung lượng
-        ↓
-Giải nén an toàn vào thư mục tạm
-        ↓
-Tìm PNG / JPG / JPEG / GIF / WEBP
-        ↓
-Chuẩn hóa prefix và tạo số thứ tự
-        ↓
-Kiểm tra ảnh hỏng, ảnh trùng và tên đã tồn tại
-        ↓
-Resize / compress ảnh tĩnh nếu cần
-        ↓
-Upload lần lượt bằng discord.py
-        ↓
-Tạo Embed report và dọn thư mục tạm
-```
-
-## Cấu trúc ZIP mẫu
-
-```text
-emoji.zip
-├── happy.png
-├── angry.jpg
-├── cat_laugh.gif
-├── pepe_smile.webp
-└── subfolder/
-    └── hello.jpeg
-```
-
-File không phải PNG/JPG/JPEG/GIF/WEBP sẽ được bỏ qua và không được thực thi.
-
-## Quy tắc đặt tên
-
-Tên file gốc chỉ được dùng để nhận diện loại ảnh; tên emoji được tạo từ `prefix`.
-
-```text
-prefix nhập vào:  Pepe Smile!!
-prefix sau chuẩn hóa: pepe_smile
-
-ảnh thứ 1 → pepe_smile_1
-ảnh thứ 2 → pepe_smile_2
-ảnh thứ 3 → pepe_smile_3
-```
-
-Quy tắc:
-
-- Chuyển thành chữ thường.
-- Ký tự không hợp lệ được đổi thành `_`.
-- Gộp nhiều dấu `_` liên tiếp.
-- Chỉ dùng chữ cái, số và underscore.
-- Tiền tố có giới hạn để chừa chỗ cho số thứ tự.
-- Nếu tên đã tồn tại trên server, bot tự tìm số tiếp theo còn trống.
-- Nếu ảnh trùng, bot bỏ qua ảnh đó nhưng không làm hỏng các ảnh còn lại.
-
-## Xử lý ảnh và GIF
-
-| Loại file | Cách xử lý |
-|---|---|
-| PNG | Kiểm tra và nén/resize nếu vượt giới hạn |
-| JPG/JPEG | Chuyển sang PNG, giữ tỷ lệ và nén nếu cần |
-| WEBP | Kiểm tra, chuyển sang định dạng phù hợp cho emoji |
-| GIF hợp lệ | Giữ animation nếu không vượt giới hạn |
-| GIF quá lớn | Báo lỗi; v1 chưa tự tối ưu GIF upload |
-| File giả hoặc ảnh hỏng | Ghi vào danh sách lỗi và tiếp tục batch |
-
-Các ảnh trạng thái trong `assets/` là WebP động. Bot chuyển chúng sang GIF trước khi tạo custom emoji để animation được giữ lại.
-
-## Duplicate detection
-
-Bot kiểm tra hai lớp:
-
-1. So sánh fingerprint với các emoji đã có trên server.
-2. So sánh fingerprint giữa các ảnh trong cùng ZIP.
-
-Vì vậy, hai file có tên khác nhau nhưng cùng nội dung vẫn được xem là trùng.
-
-Ví dụ:
-
-```text
-cat.png
-cat-copy.jpg
-```
-
-Nếu nội dung giống nhau, một file sẽ được upload và file còn lại được ghi vào mục `Trùng/bỏ qua`.
-
-## Report kết quả
-
-Bot gửi một Embed màu xanh biển gồm:
-
-- Dòng tổng kết `Thành công`.
-- Dòng tổng kết `Trùng/bỏ qua`.
-- Dòng tổng kết `Lỗi`.
-- Chi tiết những emoji đã thêm.
-- Chi tiết ảnh trùng hoặc bị bỏ qua.
-- Chi tiết lỗi từng file.
-
-Bot tạo hoặc tái sử dụng 4 custom emoji trạng thái động:
-
-```text
-report_success_gif
-report_duplicate_gif
-report_error_gif
-report_added_gif
-```
-
-Nếu server thiếu slot, thiếu quyền hoặc chưa có file asset, report vẫn hoạt động với emoji Unicode dự phòng.
-
-## Giới hạn hiện tại
-
-| Hạng mục | Giới hạn |
-|---|---:|
-| Dung lượng ZIP | 25 MB |
-| Số entry trong ZIP | 500 |
-| Dung lượng sau giải nén | 100 MB |
-| Số ảnh mỗi lần upload | 100 |
-| Dung lượng emoji đầu ra | 256 KB |
-| Kích thước resize ảnh tĩnh | 128, 112, 96, 80, 64, 48 hoặc 32 px |
-
-Ngoài giới hạn của bot, Discord Server vẫn có giới hạn riêng về số slot emoji và quyền expressions.
-
-## Bảo mật
-
-- Token chỉ đọc từ `.env`.
-- `.env` nằm trong `.gitignore`.
-- Không log hoặc hiển thị token.
-- Chặn ZIP path traversal.
-- Giới hạn ZIP bomb bằng số entry và dung lượng sau giải nén.
-- Không chạy `.exe`, `.py`, `.js`, `.bat`, `.cmd`, `.ps1`, `.sh` hoặc file lạ trong ZIP.
-- File tạm được xóa trong `finally` kể cả khi có lỗi hoặc return sớm.
-- Chỉ dùng official Discord API thông qua `discord.py`.
-- Không tích hợp Ollama trong v1.
-
-## Cấu trúc project
-
-```text
-discord-emoji-bot/
-├── .vscode/
-│   ├── settings.json
-│   └── launch.json
-├── assets/
-│   ├── readme-banner.svg
-│   ├── status_success.webp
-│   ├── status_duplicate.webp
-│   ├── status_error.webp
-│   └── status_added.webp
-├── temp/                    # File tạm trong lúc xử lý
-├── bot.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-├── README.md
-└── PLAN.md
-```
-
-## FAQ và xử lý sự cố
-
-### Command không xuất hiện trong Discord
-
-- Kiểm tra bot đã được mời với scope `applications.commands`.
-- Kiểm tra `TEST_GUILD_ID` là ID đúng của server.
-- Kiểm tra bot có mặt trong server đó.
-- Restart bot để chạy lại sync.
-- Nếu đang sync global, Discord có thể cần thêm thời gian để cập nhật.
-
-### Lỗi `403 Missing Access` khi sync
-
-Bot đang sync vào server không truy cập được. Kiểm tra `TEST_GUILD_ID`, invite đúng server và quyền bot.
-
-### Bot báo tất cả ảnh là trùng
-
-Đây thường là hành vi đúng khi bạn upload lại ảnh đã có trên server hoặc ảnh trùng nhau trong ZIP. Bot so sánh nội dung ảnh, không chỉ tên file.
-
-### Emoji trạng thái không chuyển động
-
-Bot mới dùng tên custom emoji có hậu tố `_gif`. Cần restart bot và có ít nhất 4 slot emoji trống. Nếu server còn các emoji tĩnh cũ từ bản trước, có thể xóa các emoji `report_success`, `report_duplicate`, `report_error` và `report_added` trong Server Settings → Expressions.
-
-### GIF upload bị báo quá lớn
-
-GIF upload được giữ animation và bot sẽ thử resize/nén khi vượt kích thước hoặc dung lượng. Nếu GIF quá phức tạp và vẫn không thể tối ưu, hãy giảm số frame hoặc dung lượng trước khi đưa vào ZIP.
-
-### Upload emoji báo Discord API lỗi 400
-
-Bot sẽ tự chuẩn hóa ảnh/GIF về kích thước tối đa 128 px và giới hạn dung lượng trước khi upload. Report cũng hiển thị lý do rõ hơn: `30008` là server hết slot emoji, còn `50035` thường là dữ liệu hoặc định dạng ảnh bị Discord từ chối.
-
-### Bot hiển thị “đang suy nghĩ” lâu
-
-Bot cần tải và fingerprint các emoji cũ để kiểm tra ảnh trùng, sau đó mới upload batch. Server càng nhiều emoji hoặc ZIP càng lớn thì thời gian xử lý càng tăng.
-
-### Log `yt-dlp Unexpected response from webpage request`
-
-Đây là lỗi tùy chọn khi bot đọc metadata chất lượng TikTok. Bot vẫn sử dụng dữ liệu TikWM và gửi Embed; chỉ những trường chất lượng mà nguồn không cung cấp mới hiển thị `Không rõ`. Có thể cập nhật dependency bằng:
-
-```powershell
-python -m pip install --upgrade yt-dlp
-```
-
-### Lỗi Discord `message_reference: Unknown message`
-
-Nếu tin nhắn chứa link TikTok bị xóa hoặc không còn truy cập được, bot sẽ tự gửi kết quả như một tin nhắn mới thay vì reply trực tiếp.
-
-## Roadmap
-
-Các mục sau chưa triển khai trong v1:
-
-- Progress bar hoặc cập nhật tiến trình trực tiếp.
-- Hủy batch đang chạy.
-- Dry-run / preview trước khi upload.
-- Nhiều ZIP trong một lần chạy.
-- Sticker support.
-- Tối ưu GIF upload lớn.
-- Lưu lịch sử upload.
-- Docker và logging file.
-- Ollama AI naming hoặc phân loại emoji.
-
-## Tech stack
-
-- **Python 3.11+** — runtime.
-- **discord.py** — official Discord API wrapper.
-- **Pillow** — đọc, validate, resize, compress và fingerprint ảnh.
-- **python-dotenv** — đọc biến môi trường từ `.env`.
-- **zipfile / pathlib / tempfile / asyncio** — xử lý ZIP, file tạm và tác vụ async.
-
-## Kiểm tra nhanh trước khi dùng
-
-```powershell
-python -m py_compile bot.py
-python bot.py
-```
-
-Sau đó kiểm tra lần lượt:
-
-```text
-/ping
-/upload-emojis
 ```
 
 ---
 
-<p align="center">
-  Built with Python, Pillow and discord.py · Qingxiao EJ
-</p>
+### Cài đặt tùy chọn FFmpeg / ffprobe
+> Tính năng này là **tùy chọn (Optional)**. Bot vẫn chạy hoàn hảo mà không cần cài FFmpeg. Nếu muốn hiển thị chi tiết FPS và Codec khi phân tích TikTok:
 
-<p align="center"><a href="#qingxiao-ej--discord-emoji-upload-bot">Quay lại đầu trang</a></p>
+- **Cách 1: Cài qua Chocolatey:**
+  ```powershell
+  choco install ffmpeg
+  ```
+- **Cách 2: Cài qua Scoop:**
+  ```powershell
+  scoop install ffmpeg
+  ```
+- **Cách 3: Tải trực tiếp:**
+  Tải bản build từ [gyan.dev](https://www.gyan.dev/ffmpeg/builds/), giải nén và thêm thư mục `bin` vào biến môi trường `PATH` của Windows.
+
+---
+
+### Triển khai trên Render Web Service
+Project đã tích hợp sẵn file cấu hình `render.yaml` chuẩn cho Render Web Service:
+
+1. Đưa repository lên GitHub cá nhân (đảm bảo `.env` đã nằm trong `.gitignore`).
+2. Trên Render Dashboard, chọn **New → Blueprint** và liên kết với repo.
+3. Thiết lập các biến môi trường trong mục Environment Variables:
+   - `DISCORD_TOKEN`: Token bot Discord của bạn.
+   - `TEST_GUILD_ID`: (Tùy chọn) ID server dùng để sync slash command tức thì.
+   - `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI`: Lấy từ TikTok Developer Portal nếu dùng Login Kit.
+4. Render Web Service sẽ tự động chạy lệnh `pip install -r requirements.txt` và khởi động qua `python bot.py`. Endpoint `/healthz` giúp duy trì trạng thái hoạt động của service.
+
+---
+
+## ⚙️ Cấu hình biến môi trường (`.env`)
+
+| Biến môi trường | Bắt buộc | Mô tả |
+|---|:---:|---|
+| `DISCORD_TOKEN` | **Có** | Token bí mật của Bot Discord từ Discord Developer Portal |
+| `TEST_GUILD_ID` | Không | ID của Discord Server để đồng bộ Slash Command ngay lập tức (bỏ trống sẽ đồng bộ Global) |
+| `TIKTOK_CLIENT_KEY` | Không | Client Key ứng dụng TikTok Developer (dùng cho OAuth) |
+| `TIKTOK_CLIENT_SECRET` | Không | Client Secret ứng dụng TikTok Developer (dùng cho OAuth) |
+| `TIKTOK_REDIRECT_URI` | Không | URI chuyển hướng sau khi đăng nhập TikTok (ví dụ: `https://your-app.onrender.com/tiktok/callback`) |
+| `TIKTOK_PUBLIC_URL` | Không | URL công khai của web service (ví dụ: `https://your-app.onrender.com`) |
+| `TIKTOK_SCOPES` | Không | Danh sách quyền TikTok (mặc định: `user.info.basic,user.info.profile,user.info.stats,video.list`) |
+| `PORT` | Không | Cổng mạng cho OAuth web server (mặc định: `10000`) |
+
+---
+
+## 📂 Cấu trúc dự án
+
+```text
+discord-emoji-bot/
+├── .vscode/                 # Cấu hình môi trường phát triển VS Code
+├── assets/                  # Tài nguyên đồ họa & custom emoji trạng thái
+│   ├── readme-banner.svg    # Banner chính của tài liệu
+│   ├── status_added.webp    # Emoji trạng thái đã thêm (WebP động)
+│   ├── status_duplicate.webp# Emoji trạng thái trùng lặp (WebP động)
+│   ├── status_error.webp    # Emoji trạng thái lỗi (WebP động)
+│   └── status_success.webp  # Emoji trạng thái thành công (WebP động)
+├── docs/                    # Tài liệu web tĩnh & trang điều khoản
+│   ├── index.html
+│   ├── privacy.html
+│   ├── terms.html
+│   └── style.css
+├── temp/                    # Thư mục tạm dùng khi giải nén ZIP (tự xóa)
+├── .env.example             # File mẫu biến môi trường
+├── .gitignore               # Danh sách loại trừ Git
+├── bot.py                   # Mã nguồn chính của bot (1.847 dòng)
+├── render.yaml              # Cấu hình triển khai tự động lên Render
+├── requirements.txt         # Khai báo các thư viện phụ thuộc Python
+└── README.md                # Tài liệu hướng dẫn chi tiết dự án
+```
+
+---
+
+## ❓ FAQ & Xử lý sự cố
+
+### Nhóm sự cố Emoji Uploader
+- **Hỏi: Bot báo lỗi `30008` khi upload emoji là gì?**
+  - *Đáp:* Server Discord của bạn đã hết slot chứa emoji. Cần nâng cấp cấp độ Nitro Server Boost hoặc xóa bớt các emoji không dùng đến.
+- **Hỏi: Tại sao tất cả ảnh trong file ZIP đều bị xếp vào mục Trùng/bỏ qua?**
+  - *Đáp:* Bot so sánh dữ liệu điểm ảnh (pixel hash SHA-256), không chỉ dựa vào tên file. Nếu các ảnh này đã tồn tại trên Server hoặc bị lặp lại trong chính file ZIP, bot sẽ tự động bỏ qua để tiết kiệm slot emoji.
+- **Hỏi: GIF upload lên server có giữ được chuyển động không?**
+  - *Đáp:* Có. Bot sẽ tối ưu và giữ lại toàn bộ frame cũng như tốc độ chuyển động gốc của GIF nếu dung lượng sau tối ưu nằm trong mức giới hạn 256 KB của Discord.
+
+### Nhóm sự cố TikTok Analytics & OAuth
+- **Hỏi: Máy tính không cài đặt FFmpeg thì bot có phân tích được link TikTok không?**
+  - *Đáp:* **Hoàn toàn được.** Bot sử dụng API công khai TikWM làm nguồn chính. Thiếu FFmpeg/ffprobe chỉ khiến mục thông số kỹ thuật sâu (FPS thực, codec) hiển thị `Không rõ`, mọi số liệu khác và link tải video không logo vẫn hoạt động bình thường.
+- **Hỏi: Gặp lỗi `yt-dlp Unexpected response from webpage request` trong console?**
+  - *Đáp:* Đây là hiện tượng TikTok áp dụng cơ chế chống bot đối với `yt-dlp`. Bot đã được bọc cơ chế chống crash và tự động chuyển sang sử dụng nguồn dữ liệu thay thế. Bạn có thể cập nhật `yt-dlp` lên phiên bản mới nhất bằng lệnh: `python -m pip install --upgrade yt-dlp`.
+- **Hỏi: Token kết nối TikTok lưu ở đâu? Có bị mất khi bot khởi động lại không?**
+  - *Đáp:* Trong phiên bản hiện tại, token được lưu tạm thời trong RAM của tiến trình bot. Khi dịch vụ trên Render khởi động lại hoặc chuyển sang trạng thái ngủ (sleep), người dùng chỉ cần thực hiện lại lệnh `/connect-tiktok`.
+
+---
+
+<p align="center">
+  Được phát triển với Python 3.11+, discord.py, Pillow, yt-dlp & aiohttp · <b>BOT Qingxiao</b>
+</p>

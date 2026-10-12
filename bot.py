@@ -1,29 +1,60 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.parse
 import zipfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import discord
+import aiohttp
 from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from PIL import Image
 import yt_dlp
+from aiohttp import web
 
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEST_GUILD_ID = os.getenv("TEST_GUILD_ID", "").strip()
+TIKTOK_CLIENT_KEY = os.getenv("TIKTOK_CLIENT_KEY", "").strip()
+TIKTOK_CLIENT_SECRET = os.getenv("TIKTOK_CLIENT_SECRET", "").strip()
+TIKTOK_REDIRECT_URI = os.getenv("TIKTOK_REDIRECT_URI", "").strip()
+TIKTOK_PUBLIC_URL = os.getenv("TIKTOK_PUBLIC_URL", "").strip().rstrip("/")
+TIKTOK_SCOPES = os.getenv(
+    "TIKTOK_SCOPES",
+    "user.info.basic,user.info.profile,user.info.stats,video.list",
+).strip()
+try:
+    PORT = int(os.getenv("PORT", "10000"))
+except ValueError:
+    PORT = 10000
+
+TIKTOK_AUTHORIZE_URL = "https://www.tiktok.com/v2/auth/authorize/"
+TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"
+TIKTOK_REVOKE_URL = "https://open.tiktokapis.com/v2/oauth/revoke/"
+TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/"
+OAUTH_STATE_TTL_SECONDS = 10 * 60
+
+# OAuth state is deliberately short-lived and one-time use. Tokens stay only in
+# memory for the first Render test deployment; a persistent store is a later
+# step because Render Free's local filesystem is ephemeral.
+TIKTOK_OAUTH_STATES: dict[str, dict[str, float | str]] = {}
+TIKTOK_TOKENS: dict[str, dict] = {}
+OAUTH_RUNNER: web.AppRunner | None = None
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_ZIP_SIZE = 50 * 1024 * 1024
@@ -499,6 +530,8 @@ def build_report_message(
 
 class EmojiBot(commands.Bot):
     async def setup_hook(self) -> None:
+        await start_oauth_server()
+
         if TEST_GUILD_ID.isdigit():
             guild = discord.Object(id=int(TEST_GUILD_ID))
             self.tree.copy_global_to(guild=guild)
@@ -521,10 +554,305 @@ class EmojiBot(commands.Bot):
             synced = await self.tree.sync()
             print(f"[SYNC] {len(synced)} global command(s) synced.")
 
+    async def close(self) -> None:
+        await stop_oauth_server()
+        await super().close()
+
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = EmojiBot(command_prefix="!", intents=intents)
+
+
+def _tiktok_oauth_missing_config() -> list[str]:
+    missing = []
+    if not TIKTOK_CLIENT_KEY:
+        missing.append("TIKTOK_CLIENT_KEY")
+    if not TIKTOK_CLIENT_SECRET:
+        missing.append("TIKTOK_CLIENT_SECRET")
+    if not TIKTOK_REDIRECT_URI:
+        missing.append("TIKTOK_REDIRECT_URI")
+    return missing
+
+
+def _tiktok_public_url() -> str:
+    if TIKTOK_PUBLIC_URL:
+        return TIKTOK_PUBLIC_URL
+
+    callback_suffix = "/tiktok/callback"
+    if TIKTOK_REDIRECT_URI.endswith(callback_suffix):
+        return TIKTOK_REDIRECT_URI[: -len(callback_suffix)].rstrip("/")
+    return ""
+
+
+def _prune_tiktok_oauth_states() -> None:
+    now = time.time()
+    expired = [
+        state
+        for state, record in TIKTOK_OAUTH_STATES.items()
+        if now - float(record.get("created_at", 0)) > OAUTH_STATE_TTL_SECONDS
+    ]
+    for state in expired:
+        TIKTOK_OAUTH_STATES.pop(state, None)
+
+
+def _html_page(title: str, message: str, success: bool = True) -> web.Response:
+    accent = "#1f9d55" if success else "#d64545"
+    safe_title = html.escape(title)
+    safe_message = html.escape(message)
+    body = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{safe_title}</title>
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+      background: #0b1628; color: #eef6ff; font: 16px system-ui, sans-serif; }}
+    main {{ width: min(560px, calc(100% - 36px)); padding: 32px; border-radius: 18px;
+      background: #12233d; border: 1px solid #29486d; box-shadow: 0 20px 60px #0005; }}
+    h1 {{ color: {accent}; margin-top: 0; }}
+    p {{ color: #bdd0e8; line-height: 1.65; }}
+  </style>
+</head>
+<body><main><h1>{safe_title}</h1><p>{safe_message}</p></main></body>
+</html>"""
+    return web.Response(text=body, content_type="text/html", charset="utf-8")
+
+
+async def _tiktok_json_request(
+    method: str,
+    url: str,
+    *,
+    data: dict | None = None,
+    params: dict | None = None,
+    headers: dict | None = None,
+) -> tuple[int, dict]:
+    timeout = aiohttp.ClientTimeout(total=20)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.request(
+            method,
+            url,
+            data=data,
+            params=params,
+            headers=headers,
+        ) as response:
+            try:
+                payload = await response.json(content_type=None)
+            except (aiohttp.ContentTypeError, ValueError):
+                payload = {"error": "TikTok returned a non-JSON response."}
+            return response.status, payload if isinstance(payload, dict) else {}
+
+
+async def _exchange_tiktok_code(code: str) -> dict:
+    status, payload = await _tiktok_json_request(
+        "POST",
+        TIKTOK_TOKEN_URL,
+        data={
+            "client_key": TIKTOK_CLIENT_KEY,
+            "client_secret": TIKTOK_CLIENT_SECRET,
+            "code": code,
+            "grant_type": "authorization_code",
+            "redirect_uri": TIKTOK_REDIRECT_URI,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    if status >= 400 or not payload.get("access_token"):
+        detail = payload.get("error_description") or payload.get("error") or "unknown error"
+        raise RuntimeError(f"TikTok token exchange failed: {detail}")
+    return payload
+
+
+async def _refresh_tiktok_token(refresh_token: str) -> dict:
+    status, payload = await _tiktok_json_request(
+        "POST",
+        TIKTOK_TOKEN_URL,
+        data={
+            "client_key": TIKTOK_CLIENT_KEY,
+            "client_secret": TIKTOK_CLIENT_SECRET,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        },
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    if status >= 400 or not payload.get("access_token"):
+        detail = payload.get("error_description") or payload.get("error") or "unknown error"
+        raise RuntimeError(f"TikTok token refresh failed: {detail}")
+    return payload
+
+
+async def _fetch_tiktok_user(access_token: str) -> dict:
+    fields = ",".join(
+        [
+            "open_id",
+            "avatar_url",
+            "display_name",
+            "username",
+            "bio_description",
+            "profile_deep_link",
+            "is_verified",
+            "follower_count",
+            "following_count",
+            "likes_count",
+            "video_count",
+        ]
+    )
+    status, payload = await _tiktok_json_request(
+        "GET",
+        TIKTOK_USER_INFO_URL,
+        params={"fields": fields},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    if status >= 400:
+        error = payload.get("error", {})
+        detail = error.get("message") if isinstance(error, dict) else error
+        raise RuntimeError(f"TikTok user info failed: {detail or 'unknown error'}")
+    user = payload.get("data", {}).get("user", {})
+    if not isinstance(user, dict):
+        raise RuntimeError("TikTok returned no user profile.")
+    return user
+
+
+async def _get_tiktok_token_for_user(discord_user_id: int) -> dict | None:
+    key = str(discord_user_id)
+    record = TIKTOK_TOKENS.get(key)
+    if not record:
+        return None
+
+    if float(record.get("expires_at", 0)) > time.time() + 90:
+        return record
+
+    refresh_token = record.get("refresh_token")
+    if not refresh_token:
+        TIKTOK_TOKENS.pop(key, None)
+        return None
+
+    try:
+        refreshed = await _refresh_tiktok_token(refresh_token)
+    except RuntimeError as exc:
+        print(f"[TikTok OAuth] Token refresh failed for Discord user {key}: {exc}")
+        TIKTOK_TOKENS.pop(key, None)
+        return None
+
+    refreshed["expires_at"] = time.time() + int(refreshed.get("expires_in", 86400))
+    refreshed.setdefault("refresh_token", refresh_token)
+    TIKTOK_TOKENS[key] = refreshed
+    return refreshed
+
+
+async def tiktok_health_handler(_: web.Request) -> web.Response:
+    return web.json_response({"status": "ok", "service": "qingxiao-discord-bot"})
+
+
+async def tiktok_login_handler(request: web.Request) -> web.Response:
+    missing = _tiktok_oauth_missing_config()
+    if missing:
+        return _html_page(
+            "TikTok connection is not ready",
+            "Missing server configuration: " + ", ".join(missing),
+            success=False,
+        )
+
+    raw_user_id = request.query.get("discord_user_id", "")
+    if not raw_user_id.isdigit():
+        return _html_page(
+            "Invalid connection request",
+            "Open the connection link from the Discord bot again.",
+            success=False,
+        )
+
+    _prune_tiktok_oauth_states()
+    state = secrets.token_urlsafe(32)
+    TIKTOK_OAUTH_STATES[state] = {
+        "discord_user_id": raw_user_id,
+        "created_at": time.time(),
+    }
+    query = urllib.parse.urlencode(
+        {
+            "client_key": TIKTOK_CLIENT_KEY,
+            "response_type": "code",
+            "scope": TIKTOK_SCOPES,
+            "redirect_uri": TIKTOK_REDIRECT_URI,
+            "state": state,
+        }
+    )
+    raise web.HTTPFound(f"{TIKTOK_AUTHORIZE_URL}?{query}")
+
+
+async def tiktok_callback_handler(request: web.Request) -> web.Response:
+    error = request.query.get("error")
+    if error:
+        description = request.query.get("error_description", "TikTok authorization was cancelled.")
+        return _html_page("TikTok connection cancelled", description, success=False)
+
+    state = request.query.get("state", "")
+    code = request.query.get("code", "")
+    record = TIKTOK_OAUTH_STATES.pop(state, None)
+    if not record or time.time() - float(record.get("created_at", 0)) > OAUTH_STATE_TTL_SECONDS:
+        return _html_page(
+            "Invalid or expired connection",
+            "Please start the TikTok connection again from Discord.",
+            success=False,
+        )
+    if not code:
+        return _html_page("TikTok connection failed", "TikTok did not return an authorization code.", success=False)
+
+    discord_user_id = str(record["discord_user_id"])
+    try:
+        token_payload = await _exchange_tiktok_code(code)
+        token_payload["expires_at"] = time.time() + int(
+            token_payload.get("expires_in", 86400)
+        )
+        TIKTOK_TOKENS[discord_user_id] = token_payload
+        profile = await _fetch_tiktok_user(token_payload["access_token"])
+    except (aiohttp.ClientError, RuntimeError, KeyError, ValueError) as exc:
+        print(f"[TikTok OAuth] Callback failed: {exc}")
+        return _html_page(
+            "TikTok connection failed",
+            "The bot could not finish the connection. Check the bot log and try again.",
+            success=False,
+        )
+
+    display_name = profile.get("display_name") or profile.get("username") or "your account"
+    try:
+        discord_user = bot.get_user(int(discord_user_id))
+        if discord_user is None:
+            discord_user = await bot.fetch_user(int(discord_user_id))
+        await discord_user.send(
+            f"✅ Đã kết nối TikTok **{display_name}**. Dùng `/tiktok-account` để xem thông tin tài khoản."
+        )
+    except (discord.DiscordException, ValueError):
+        pass
+
+    return _html_page(
+        "TikTok connected",
+        f"TikTok account {display_name} was connected successfully. Return to Discord and use /tiktok-account.",
+    )
+
+
+async def start_oauth_server() -> None:
+    global OAUTH_RUNNER
+    if OAUTH_RUNNER is not None:
+        return
+
+    app = web.Application()
+    app.router.add_get("/", tiktok_health_handler)
+    app.router.add_get("/healthz", tiktok_health_handler)
+    app.router.add_get("/tiktok/login", tiktok_login_handler)
+    app.router.add_get("/tiktok/callback", tiktok_callback_handler)
+
+    OAUTH_RUNNER = web.AppRunner(app)
+    await OAUTH_RUNNER.setup()
+    site = web.TCPSite(OAUTH_RUNNER, "0.0.0.0", PORT)
+    await site.start()
+    print(f"[WEB] OAuth callback server listening on port {PORT}.")
+
+
+async def stop_oauth_server() -> None:
+    global OAUTH_RUNNER
+    if OAUTH_RUNNER is not None:
+        await OAUTH_RUNNER.cleanup()
+        OAUTH_RUNNER = None
 
 
 @bot.event
@@ -1168,6 +1496,123 @@ async def on_message(message: discord.Message):
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"Pong! {round(bot.latency * 1000)} ms",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="connect-tiktok",
+    description="Kết nối tài khoản TikTok của bạn bằng TikTok Login Kit.",
+)
+@app_commands.guild_only()
+async def connect_tiktok(interaction: discord.Interaction):
+    missing = _tiktok_oauth_missing_config()
+    public_url = _tiktok_public_url()
+    if missing or not public_url:
+        details = missing or ["TIKTOK_PUBLIC_URL"]
+        await interaction.response.send_message(
+            "TikTok OAuth chưa được cấu hình trên máy chủ: " + ", ".join(details),
+            ephemeral=True,
+        )
+        return
+
+    login_url = (
+        f"{public_url}/tiktok/login?"
+        + urllib.parse.urlencode({"discord_user_id": str(interaction.user.id)})
+    )
+    view = discord.ui.View(timeout=600)
+    view.add_item(
+        discord.ui.Button(
+            label="Đăng nhập TikTok",
+            style=discord.ButtonStyle.link,
+            url=login_url,
+        )
+    )
+    await interaction.response.send_message(
+        "Bấm nút bên dưới để đăng nhập trực tiếp trên TikTok và cấp quyền. "
+        "Bot không nhận mật khẩu hoặc cookie của bạn.",
+        view=view,
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(
+    name="tiktok-account",
+    description="Xem thông tin TikTok đã được bạn cấp quyền.",
+)
+@app_commands.guild_only()
+async def tiktok_account(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    token = await _get_tiktok_token_for_user(interaction.user.id)
+    if not token:
+        await interaction.followup.send(
+            "Bạn chưa kết nối TikTok hoặc phiên kết nối đã hết hạn. "
+            "Hãy dùng `/connect-tiktok` trước.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        profile = await _fetch_tiktok_user(token["access_token"])
+    except (aiohttp.ClientError, RuntimeError, KeyError, ValueError) as exc:
+        print(f"[TikTok API] User info failed: {exc}")
+        await interaction.followup.send(
+            "Không thể đọc dữ liệu TikTok lúc này. Có thể quyền đã hết hạn hoặc chưa được TikTok duyệt.",
+            ephemeral=True,
+        )
+        return
+
+    display_name = profile.get("display_name") or "Không rõ"
+    username = profile.get("username")
+    embed = discord.Embed(
+        title="TikTok account",
+        description=f"**{display_name}**" + (f" · @{username}" if username else ""),
+        color=0x2F80ED,
+    )
+    if profile.get("avatar_url"):
+        embed.set_thumbnail(url=profile["avatar_url"])
+    embed.add_field(name="Followers", value=_format_number(profile.get("follower_count")), inline=True)
+    embed.add_field(name="Following", value=_format_number(profile.get("following_count")), inline=True)
+    embed.add_field(name="Likes", value=_format_number(profile.get("likes_count")), inline=True)
+    embed.add_field(name="Videos", value=_format_number(profile.get("video_count")), inline=True)
+    embed.add_field(name="Verified", value="Yes" if profile.get("is_verified") else "No", inline=True)
+    embed.add_field(name="Bio", value=(profile.get("bio_description") or "Không có" )[:1024], inline=False)
+    if profile.get("profile_deep_link"):
+        embed.add_field(name="Profile", value=f"[Mở TikTok]({profile['profile_deep_link']})", inline=False)
+    embed.set_footer(text="Dữ liệu lấy từ TikTok API theo các quyền bạn đã cấp.")
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(
+    name="disconnect-tiktok",
+    description="Ngắt kết nối và thu hồi quyền TikTok của bạn.",
+)
+@app_commands.guild_only()
+async def disconnect_tiktok(interaction: discord.Interaction):
+    token = TIKTOK_TOKENS.pop(str(interaction.user.id), None)
+    if not token:
+        await interaction.response.send_message(
+            "Bạn hiện chưa có kết nối TikTok đang lưu.",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        await _tiktok_json_request(
+            "POST",
+            TIKTOK_REVOKE_URL,
+            data={
+                "client_key": TIKTOK_CLIENT_KEY,
+                "client_secret": TIKTOK_CLIENT_SECRET,
+                "token": token.get("access_token", ""),
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    except aiohttp.ClientError as exc:
+        print(f"[TikTok OAuth] Revoke request failed: {exc}")
+
+    await interaction.response.send_message(
+        "✅ Đã ngắt kết nối TikTok và xóa token khỏi bộ nhớ của bot.",
         ephemeral=True,
     )
 
